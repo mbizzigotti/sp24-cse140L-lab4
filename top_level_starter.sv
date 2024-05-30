@@ -7,31 +7,35 @@ module top_level (
 
 // dat_mem interface
 // you will need this to talk to the data memory
-logic         write_en;        // data memory write enable        
+logic      write_en;        // data memory write enable        
 logic[7:0] raddr,           // read address pointer
-              waddr;           // write address pointer
+           waddr;           // write address pointer
 logic[7:0] data_in;         // to dat_mem
 wire [7:0] data_out;        // from dat_mem
 // LFSR control input and data output
-logic         LFSR_en;         // 1: advance LFSR; 0: hold		
+logic      LFSR_en;         // 1: advance LFSR; 0: hold		
 // taps, start, pre_len are constants loaded from dat_mem [61:63]
-logic[   5:0] taps,            // LFSR feedback pattern temp register
-              start;           // LFSR initial state temp register
-logic[   7:0] pre_len;         // preamble (_____) length           
-logic         taps_en,         // 1: load taps register; 0: hold
-              start_en,        //   same for start temp register
-              prelen_en;       //   same for preamble length temp
-logic         load_LFSR;       // copy taps and start into LFSR
-wire [   5:0] LFSR;            // LFSR current value            
-logic[   7:0] scram;           // encrypted message
-logic[   7:0] ct_inc;          // prog count step (default = +1)
+logic[5:0] taps,            // LFSR feedback pattern temp register
+           start;           // LFSR initial state temp register
+logic[7:0] pre_len;         // preamble (_____) length           
+
+logic      taps_en,         // 1: load taps register; 0: hold
+           start_en,        //   same for start temp register
+           prelen_en;       //   same for preamble length temp
+
+logic      load_LFSR;       // copy taps and start into LFSR
+wire [5:0] LFSR;            // LFSR current value            
+logic[7:0] scram;           // encrypted message
+logic[7:0] ct_inc;          // prog count step (default = +1)
+
+logic[7:0] offset;
 // instantiate the data memory 
 dat_mem dm1(.clk, .write_en, .raddr, .waddr,
             .data_in, .data_out);
 
 // instantiate the LFSR core
 // need one for Lab 4; may want 6 for Lab 5
-lfsr6 l6(.clk, .en(LFSR_en), .init,
+lfsr6 l6(.clk, .en(LFSR_en), .init(load_LFSR),
          .taps, .start, .state(LFSR));
 
 logic[7:0] ct;                  // your program counter
@@ -79,7 +83,7 @@ always_comb begin
          end               // load LFSR start temp reg
     4:   begin
            raddr      = 'd63;
-		   waddr      = 'd64;
+		       waddr      = 'd64;
            start_en   = 'b1;
          end
 	5:   begin
@@ -87,10 +91,6 @@ always_comb begin
 		   waddr      =	'd64;
 		   load_LFSR  = 'b1;   // copy taps and start temps into LFSR
 		 end
-    6:   begin             
-	       raddr      = 'd0;
-		   waddr      =	'd64;
-         end       
 	default: begin
 /* What happens next?
    1)  for pre_len cycles, bitwise XOR ASCII _ = 0x5f with current
@@ -109,7 +109,16 @@ Watch how the testbench performs Prog. 4. You will be doing the same
 operation, but at a more detailed, hardware level, instead of at the 
 higher level the testbench uses.       
 */
-	     end
+      LFSR_en  = 'b1;
+      write_en = 'b1;
+      waddr = 'd58 + ct;
+      if (ct < pre_len + 5) begin
+        data_in = 8'h5f ^ {2'b00, LFSR}; 
+      end else begin
+        raddr = ct - 5 - pre_len;
+        data_in = data_out ^ {2'b00, LFSR};
+      end
+	  end
   endcase
 end 
 
@@ -128,6 +137,6 @@ always @(posedge clk)
    This may be more or fewer clock cycles than mine. 
    Test bench waits for a done flag, so generate one at some time.
 */
-assign done = &ct[5:0];
+assign done = (waddr > 127);
 
 endmodule
