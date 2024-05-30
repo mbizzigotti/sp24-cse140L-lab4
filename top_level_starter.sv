@@ -28,7 +28,11 @@ wire [5:0] LFSR;            // LFSR current value
 logic[7:0] scram;           // encrypted message
 logic[7:0] ct_inc;          // prog count step (default = +1)
 
-logic[7:0] offset;
+logic[7:0] pre_ct,
+           next_pre_ct;
+
+logic[7:0] next_waddr;
+logic[7:0] next_raddr;
 // instantiate the data memory 
 dat_mem dm1(.clk, .write_en, .raddr, .waddr,
             .data_in, .data_out);
@@ -46,6 +50,12 @@ always @(posedge clk)
   else 
 	ct <= ct + ct_inc;     // default: next_ct = ct+1
 
+always @(posedge clk) begin
+  next_waddr <= waddr + 'b1;
+  next_raddr <= raddr + 'b1;
+  pre_ct    <= next_pre_ct;
+end
+
 // control decode logic (does work of instr. mem and control decode)
 always_comb begin
 // list defaults here; case needs list only exceptions
@@ -59,67 +69,59 @@ always_comb begin
 // PC normally advances by 1
 // override to go back in a subroutine or forward/back in a branch 
   ct_inc    = 'b1;         // PC normally advances by 1
-  case(ct)
-    0,1: begin   
-           raddr     = 'd0;         // memory read address pointer
-   		   waddr     = 'd64;    	// memory write address pointer
-         end       // no op to wait for things to settle from init
-// first tasks to be done:
-// 1) raddr = 61, prelen_en = 1
-//    pre_len <= data_out  
-// 2) raddr = 62, taps_en = 1
-//    taps <= data_out
-// 3) raddr = 63, start_en = 1
-//    start <= data_out
-    2:   begin             // load pre_len temp register
-           raddr      = 'd61;
-           waddr      = 'd64;         // memory write address pointer
-           prelen_en  = 'b1;
-         end
-    3:   begin             // load taps temp reg
-           raddr      = 'd62;   
-           waddr      = 'd64;
-           taps_en    = 'b1;
-         end               // load LFSR start temp reg
-    4:   begin
-           raddr      = 'd63;
-		       waddr      = 'd64;
-           start_en   = 'b1;
-         end
-	5:   begin
-	       raddr      = 'd0;
-		   waddr      =	'd64;
-		   load_LFSR  = 'b1;   // copy taps and start temps into LFSR
-		 end
-	default: begin
-/* What happens next?
-   1)  for pre_len cycles, bitwise XOR ASCII _ = 0x5f with current
-     LFSR state; prepend LFSR state with 2'b00 to pad to 8 bits
-     write each successive result into dat_mem[64], dat_mem[65], etc.
-     advance LFSR to next state while writing result  
-   2) after pre_len operations, start reading data from dat_mem[0], [1], ...
-     bitwise XOR each value w/ current LFLSR state
-     store successively in dat_mem[64+pre_len+j], where j = 0, 1, ..., 49
-     advance LFSR to next state while writing each result
-     
-You may want some sort of memory address counter or an adder that creates
-an offset from the prog_counter.
-
-Watch how the testbench performs Prog. 4. You will be doing the same 
-operation, but at a more detailed, hardware level, instead of at the 
-higher level the testbench uses.       
-*/
+  data_in   = 'b0;
+  raddr     = 'b0;
+  waddr     = 'd64;
+  next_pre_ct = 'b0;
+  if (ct < 2) begin end
+  else if (ct == 2)
+    begin             // load pre_len temp register
+      raddr      = 'd61;
+      waddr      = 'd64;         // memory write address pointer
+      prelen_en  = 'b1;
+    end
+  else if (ct == 3)
+    begin             // load taps temp reg
+      raddr      = 'd62;   
+      waddr      = 'd64;
+      taps_en    = 'b1;
+    end               // load LFSR start temp reg
+  else if (ct == 4)
+    begin
+      raddr      = 'd63;
+		  waddr      = 'd64;
+      start_en   = 'b1;
+    end
+	else if (ct == 5)
+    begin
+      raddr      = 'd0;
+      waddr      = 'd64;
+      load_LFSR  = 'b1;   // copy taps and start temps into LFSR
+    end
+  else if (ct == 6)
+    begin
       LFSR_en  = 'b1;
       write_en = 'b1;
-      waddr = 'd58 + ct;
-      if (ct < pre_len + 5) begin
-        data_in = 8'h5f ^ {2'b00, LFSR}; 
-      end else begin
-        raddr = ct - 5 - pre_len;
-        data_in = data_out ^ {2'b00, LFSR};
-      end
-	  end
-  endcase
+      waddr = 'd64;
+      data_in = 8'h5f ^ {2'b00, LFSR};
+      next_pre_ct = pre_len - 'b1;
+    end
+	else begin
+    LFSR_en  = 'b1;
+    write_en = 'b1;
+    waddr = next_waddr;
+    
+    // Here we use the preamble 0x5F
+    if (pre_ct != 0) begin
+      next_pre_ct = pre_ct - 'b1;
+      data_in = 8'h5f ^ {2'b00, LFSR};
+    end
+    // Then we start reading from memory
+    else begin
+      raddr = next_raddr;
+      data_in = data_out ^ {2'b00, LFSR};
+    end
+	end
 end 
 
 
@@ -128,9 +130,9 @@ always @(posedge clk)
   if(prelen_en)
     pre_len <= data_out;      // copy from data_mem[61] to pre_len reg.
   else if(taps_en)
-    taps    <= data_out;      // copy from data_mem[62] to taps reg.
+    taps    <= data_out[5:0];      // copy from data_mem[62] to taps reg.
   else if(start_en)
-    start   <= data_out;      // copy from data_mem[63] to start reg.  
+    start   <= data_out[5:0];      // copy from data_mem[63] to start reg.  
 
 /* My done flag goes high once every 64 clock cycles
    Yours should go high at the completion of your encryption operation.
